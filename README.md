@@ -8,6 +8,8 @@ Tokenizer and chat-template contracts for local SLM and LLM tooling.
 go get github.com/surya-mp/go-tokenizer@v0.1.0
 ```
 
+See the [API reference](docs/api.md).
+
 The initial implementation provides generic messages, ChatML rendering, BPE,
 and standard GPT-2 ByteLevel splitting plus byte encoding/decoding.
 `LoadByteLevelTokenizer` loads the strict BPE/ByteLevel tokenizer.json subset
