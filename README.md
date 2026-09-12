@@ -5,7 +5,7 @@ Tokenizer and chat-template contracts for local SLM and LLM tooling.
 ## Install
 
 ```sh
-go get github.com/surya-mp/go-tokenizer@v0.1.0
+go get github.com/surya-mp/go-tokenizer
 ```
 
 See the [API reference](docs/api.md).
