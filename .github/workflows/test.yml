@@ -1,0 +1,20 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './.git/*'))"
+      - run: go vet ./...
+      - run: go test -race ./...
