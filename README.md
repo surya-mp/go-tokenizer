@@ -1,6 +1,6 @@
 # go-tokenizer
 
-Tokenizer and chat-template contracts for local SLM and LLM tooling.
+Tokenizer and chat-template contracts for local SLM and LLM tooling in Go.
 
 ## Install
 
@@ -26,3 +26,9 @@ _ = ids
 _ = tokenIDs
 _ = err
 ```
+
+Use this package when you need a Go Hugging Face tokenizer subset, Qwen
+tokenizer assets, Qwen chat template rendering, ChatML prompts, or local
+encode/decode fixtures for supervised fine-tuning and causal language model
+evaluation. Golden tests pin Qwen3 chat-template output and ByteLevel edge
+cases including whitespace, special tokens, and newline handling.
