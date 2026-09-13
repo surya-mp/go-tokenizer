@@ -112,7 +112,7 @@ func LoadByteLevelTokenizer(path string) (*ByteLevelTokenizer, error) {
 	if _, err := byteLevelConfig(document.Decoder); err != nil {
 		return nil, err
 	}
-	if !isNull(document.Normalizer) || !isNull(document.PostProcessor) {
+	if !supportedNormalizer(document.Normalizer) || !supportedPostProcessor(document.PostProcessor) {
 		return nil, ErrUnsupportedTokenizerJSON
 	}
 	bpe, err := LoadBPE(path)
@@ -153,13 +153,51 @@ func isNull(raw json.RawMessage) bool {
 
 func byteLevelConfig(raw json.RawMessage) (bool, error) {
 	var config struct {
-		Type           string `json:"type"`
-		AddPrefixSpace bool   `json:"add_prefix_space"`
+		Type           string            `json:"type"`
+		AddPrefixSpace bool              `json:"add_prefix_space"`
+		PreTokenizers  []json.RawMessage `json:"pretokenizers"`
 	}
-	if len(raw) == 0 || json.Unmarshal(raw, &config) != nil || config.Type != "ByteLevel" {
+	if len(raw) == 0 || json.Unmarshal(raw, &config) != nil {
 		return false, ErrUnsupportedTokenizerJSON
 	}
-	return config.AddPrefixSpace, nil
+	if config.Type == "ByteLevel" {
+		return config.AddPrefixSpace, nil
+	}
+	if config.Type == "Sequence" {
+		for _, child := range config.PreTokenizers {
+			prefixSpace, err := byteLevelConfig(child)
+			if err == nil {
+				return prefixSpace, nil
+			}
+		}
+	}
+	return false, ErrUnsupportedTokenizerJSON
+}
+
+func supportedNormalizer(raw json.RawMessage) bool {
+	if isNull(raw) {
+		return true
+	}
+	var config struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &config) != nil {
+		return false
+	}
+	return config.Type == "NFC"
+}
+
+func supportedPostProcessor(raw json.RawMessage) bool {
+	if isNull(raw) {
+		return true
+	}
+	var config struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &config) != nil {
+		return false
+	}
+	return config.Type == "ByteLevel"
 }
 
 // Encode converts text to IDs, matching added tokens before ByteLevel BPE.

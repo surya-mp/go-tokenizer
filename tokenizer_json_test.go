@@ -50,6 +50,27 @@ func TestLoadByteLevelTokenizerRejectsComposition(t *testing.T) {
 	}
 }
 
+func TestLoadByteLevelTokenizerAcceptsQwenByteLevelComposition(t *testing.T) {
+	path := writeTokenizerJSON(t, `{
+  "normalizer":{"type":"NFC"},
+  "pre_tokenizer":{"type":"Sequence","pretokenizers":[
+    {"type":"Split","pattern":{"Regex":"test"},"behavior":"Isolated","invert":false},
+    {"type":"ByteLevel","add_prefix_space":false,"trim_offsets":false,"use_regex":false}
+  ]},
+  "post_processor":{"type":"ByteLevel","add_prefix_space":false,"trim_offsets":false,"use_regex":false},
+  "decoder":{"type":"ByteLevel"},
+  "model":{"type":"BPE","vocab":{"h":0,"i":1},"merges":[]},
+  "added_tokens":[{"id":2,"content":"<|im_end|>","special":true}]
+}`)
+	tokenizer, err := LoadByteLevelTokenizer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := tokenizer.TokenID("<|im_end|>"); !ok || id != 2 {
+		t.Fatalf("qwen added token id = %d, %t", id, ok)
+	}
+}
+
 func TestLoadByteLevelTokenizerRejectsIgnoredBehavior(t *testing.T) {
 	for _, field := range []string{
 		`"normalizer":{"type":"Lowercase"}`,
