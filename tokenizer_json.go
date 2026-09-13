@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 var (
@@ -20,6 +22,8 @@ var (
 type ByteLevelTokenizer struct {
 	model       *ByteLevelBPE
 	prefixSpace bool
+	qwenSplit   bool
+	nfc         bool
 	added       map[string]int
 	byID        map[int]addedToken
 	ordered     []string
@@ -105,14 +109,18 @@ func LoadByteLevelTokenizer(path string) (*ByteLevelTokenizer, error) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidTokenizerJSON, err)
 	}
-	prefixSpace, err := byteLevelConfig(document.PreTokenizer)
+	prefixSpace, qwenSplit, err := preTokenizerConfig(document.PreTokenizer)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := byteLevelConfig(document.Decoder); err != nil {
+	if err := decoderConfig(document.Decoder); err != nil {
 		return nil, err
 	}
-	if !supportedNormalizer(document.Normalizer) || !supportedPostProcessor(document.PostProcessor) {
+	nfc, err := normalizerConfig(document.Normalizer)
+	if err != nil {
+		return nil, err
+	}
+	if err := postProcessorConfig(document.PostProcessor); err != nil {
 		return nil, ErrUnsupportedTokenizerJSON
 	}
 	bpe, err := LoadBPE(path)
@@ -124,7 +132,7 @@ func LoadByteLevelTokenizer(path string) (*ByteLevelTokenizer, error) {
 		return nil, err
 	}
 	tokenizer := &ByteLevelTokenizer{
-		model: model, prefixSpace: prefixSpace,
+		model: model, prefixSpace: prefixSpace, qwenSplit: qwenSplit, nfc: nfc,
 		added: make(map[string]int, len(document.AddedTokens)), byID: make(map[int]addedToken, len(document.AddedTokens)),
 	}
 	for _, token := range document.AddedTokens {
@@ -151,53 +159,99 @@ func isNull(raw json.RawMessage) bool {
 	return len(raw) == 0 || strings.TrimSpace(string(raw)) == "null"
 }
 
-func byteLevelConfig(raw json.RawMessage) (bool, error) {
+const qwenSplitPattern = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+
+func preTokenizerConfig(raw json.RawMessage) (bool, bool, error) {
 	var config struct {
 		Type           string            `json:"type"`
 		AddPrefixSpace bool              `json:"add_prefix_space"`
 		PreTokenizers  []json.RawMessage `json:"pretokenizers"`
 	}
 	if len(raw) == 0 || json.Unmarshal(raw, &config) != nil {
-		return false, ErrUnsupportedTokenizerJSON
+		return false, false, ErrUnsupportedTokenizerJSON
 	}
 	if config.Type == "ByteLevel" {
-		return config.AddPrefixSpace, nil
+		return config.AddPrefixSpace, false, nil
 	}
-	if config.Type == "Sequence" {
-		for _, child := range config.PreTokenizers {
-			prefixSpace, err := byteLevelConfig(child)
-			if err == nil {
-				return prefixSpace, nil
-			}
-		}
+	if config.Type != "Sequence" || len(config.PreTokenizers) != 2 || !qwenSplitConfig(config.PreTokenizers[0]) {
+		return false, false, ErrUnsupportedTokenizerJSON
 	}
-	return false, ErrUnsupportedTokenizerJSON
+	var byteLevel struct {
+		Type           string `json:"type"`
+		AddPrefixSpace bool   `json:"add_prefix_space"`
+		UseRegex       bool   `json:"use_regex"`
+	}
+	if json.Unmarshal(config.PreTokenizers[1], &byteLevel) != nil || byteLevel.Type != "ByteLevel" || byteLevel.AddPrefixSpace || byteLevel.UseRegex {
+		return false, false, ErrUnsupportedTokenizerJSON
+	}
+	return false, true, nil
 }
 
-func supportedNormalizer(raw json.RawMessage) bool {
+func qwenSplitConfig(raw json.RawMessage) bool {
+	var config struct {
+		Type     string                 `json:"type"`
+		Pattern  struct{ Regex string } `json:"pattern"`
+		Behavior string                 `json:"behavior"`
+		Invert   bool                   `json:"invert"`
+	}
+	return json.Unmarshal(raw, &config) == nil && config.Type == "Split" && config.Pattern.Regex == qwenSplitPattern && config.Behavior == "Isolated" && !config.Invert
+}
+
+func decoderConfig(raw json.RawMessage) error {
+	var config struct {
+		Type string `json:"type"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &config) != nil || config.Type != "ByteLevel" {
+		return ErrUnsupportedTokenizerJSON
+	}
+	return nil
+}
+
+func normalizerConfig(raw json.RawMessage) (bool, error) {
 	if isNull(raw) {
-		return true
+		return false, nil
 	}
 	var config struct {
 		Type string `json:"type"`
 	}
 	if json.Unmarshal(raw, &config) != nil {
-		return false
+		return false, ErrUnsupportedTokenizerJSON
 	}
-	return config.Type == "NFC"
+	if config.Type != "NFC" {
+		return false, ErrUnsupportedTokenizerJSON
+	}
+	return true, nil
 }
 
-func supportedPostProcessor(raw json.RawMessage) bool {
+func postProcessorConfig(raw json.RawMessage) error {
 	if isNull(raw) {
-		return true
+		return nil
 	}
 	var config struct {
-		Type string `json:"type"`
+		Type   string            `json:"type"`
+		Single []json.RawMessage `json:"single"`
+		Pair   []json.RawMessage `json:"pair"`
 	}
 	if json.Unmarshal(raw, &config) != nil {
-		return false
+		return ErrUnsupportedTokenizerJSON
 	}
-	return config.Type == "ByteLevel"
+	if config.Type == "ByteLevel" {
+		return nil
+	}
+	if config.Type != "TemplateProcessing" || len(config.Single) != 1 || !templateSequence(config.Single[0], "A", 0) || len(config.Pair) != 2 || !templateSequence(config.Pair[0], "A", 0) || !templateSequence(config.Pair[1], "B", 1) {
+		return ErrUnsupportedTokenizerJSON
+	}
+	return nil
+}
+
+func templateSequence(raw json.RawMessage, id string, typeID int) bool {
+	var value struct {
+		Sequence struct {
+			ID     string `json:"id"`
+			TypeID int    `json:"type_id"`
+		} `json:"Sequence"`
+	}
+	return json.Unmarshal(raw, &value) == nil && value.Sequence.ID == id && value.Sequence.TypeID == typeID
 }
 
 // Encode converts text to IDs, matching added tokens before ByteLevel BPE.
@@ -210,14 +264,14 @@ func (t *ByteLevelTokenizer) Encode(text string) ([]int, error) {
 	for start < len(text) {
 		index, token := t.nextAdded(text[start:])
 		if index < 0 {
-			encoded, err := (ByteLevel{AddPrefixSpace: t.prefixSpace && atStart}).Encode(t.model, text[start:])
+			encoded, err := t.encodePlain(text[start:], atStart)
 			if err != nil {
 				return nil, err
 			}
 			return append(ids, encoded...), nil
 		}
 		if index > 0 {
-			encoded, err := (ByteLevel{AddPrefixSpace: t.prefixSpace && atStart}).Encode(t.model, text[start:start+index])
+			encoded, err := t.encodePlain(text[start:start+index], atStart)
 			if err != nil {
 				return nil, err
 			}
@@ -228,6 +282,13 @@ func (t *ByteLevelTokenizer) Encode(text string) ([]int, error) {
 		atStart = false
 	}
 	return ids, nil
+}
+
+func (t *ByteLevelTokenizer) encodePlain(text string, atStart bool) ([]int, error) {
+	if t.nfc {
+		text = norm.NFC.String(text)
+	}
+	return (ByteLevel{AddPrefixSpace: t.prefixSpace && atStart, Qwen: t.qwenSplit}).Encode(t.model, text)
 }
 
 // Decode converts IDs to text. skipSpecialTokens omits added special tokens.

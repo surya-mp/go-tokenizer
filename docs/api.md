@@ -6,7 +6,7 @@ Canonical API documentation is generated from Go doc comments on
 | API | Use |
 | --- | --- |
 | `LoadByteLevelTokenizerAssets` | Load `tokenizer.json` plus configured special IDs. |
-| `LoadByteLevelTokenizer` | Load the supported strict tokenizer JSON subset. |
+| `LoadByteLevelTokenizer` | Load strict ByteLevel BPE and the exact Qwen JSON composition. |
 | `ByteLevelTokenizer.Encode` / `Decode` | Convert text and token IDs. |
 | `Qwen3Chat.Render` | Render Qwen3 text chat prompts. |
 | `ChatML.Render` | Render generic ChatML prompts. |

@@ -2,6 +2,7 @@ package tokenizer
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -54,20 +55,41 @@ func TestLoadByteLevelTokenizerAcceptsQwenByteLevelComposition(t *testing.T) {
 	path := writeTokenizerJSON(t, `{
   "normalizer":{"type":"NFC"},
   "pre_tokenizer":{"type":"Sequence","pretokenizers":[
-    {"type":"Split","pattern":{"Regex":"test"},"behavior":"Isolated","invert":false},
+    {"type":"Split","pattern":{"Regex":"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"},"behavior":"Isolated","invert":false},
     {"type":"ByteLevel","add_prefix_space":false,"trim_offsets":false,"use_regex":false}
   ]},
-  "post_processor":{"type":"ByteLevel","add_prefix_space":false,"trim_offsets":false,"use_regex":false},
+  "post_processor":{"type":"TemplateProcessing","single":[{"Sequence":{"id":"A","type_id":0}}],"pair":[{"Sequence":{"id":"A","type_id":0}},{"Sequence":{"id":"B","type_id":1}}],"special_tokens":{}},
   "decoder":{"type":"ByteLevel"},
-  "model":{"type":"BPE","vocab":{"h":0,"i":1},"merges":[]},
-  "added_tokens":[{"id":2,"content":"<|im_end|>","special":true}]
+  "model":{"type":"BPE","vocab":{"h":0,"i":1,"1":2,"2":3},"merges":[]},
+  "added_tokens":[{"id":4,"content":"<|im_end|>","special":true}]
 }`)
 	tokenizer, err := LoadByteLevelTokenizer(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := tokenizer.TokenID("<|im_end|>"); !ok || id != 2 {
+	if id, ok := tokenizer.TokenID("<|im_end|>"); !ok || id != 4 {
 		t.Fatalf("qwen added token id = %d, %t", id, ok)
+	}
+	ids, err := tokenizer.Encode("hi12")
+	if err != nil || !reflect.DeepEqual(ids, []int{0, 1, 2, 3}) {
+		t.Fatalf("qwen IDs = %v, err = %v", ids, err)
+	}
+}
+
+func TestLoadByteLevelTokenizerAppliesNFC(t *testing.T) {
+	bytes := byteToRune()
+	path := writeTokenizerJSON(t, fmt.Sprintf(`{
+  "normalizer":{"type":"NFC"},
+  "pre_tokenizer":{"type":"ByteLevel"},"decoder":{"type":"ByteLevel"},
+  "model":{"type":"BPE","vocab":{%q:0,%q:1},"merges":[]}
+}`, string(bytes[0xc3]), string(bytes[0xa9])))
+	tokenizer, err := LoadByteLevelTokenizer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := tokenizer.Encode("e\u0301")
+	if err != nil || !reflect.DeepEqual(ids, []int{0, 1}) {
+		t.Fatalf("NFC IDs = %v, err = %v", ids, err)
 	}
 }
 
@@ -85,6 +107,18 @@ func TestLoadByteLevelTokenizerRejectsIgnoredBehavior(t *testing.T) {
 		if !errors.Is(err, ErrUnsupportedTokenizerJSON) && !errors.Is(err, ErrInvalidTokenizerJSON) {
 			t.Fatalf("field %s err = %v", field, err)
 		}
+	}
+}
+
+func TestLoadByteLevelTokenizerRejectsNonQwenSequence(t *testing.T) {
+	path := writeTokenizerJSON(t, `{
+  "model":{"type":"BPE","vocab":{"a":0},"merges":[]},
+  "pre_tokenizer":{"type":"Sequence","pretokenizers":[{"type":"Split","pattern":{"Regex":"."},"behavior":"Isolated"},{"type":"ByteLevel","use_regex":false}]},
+  "decoder":{"type":"ByteLevel"}
+}`)
+	_, err := LoadByteLevelTokenizer(path)
+	if !errors.Is(err, ErrUnsupportedTokenizerJSON) {
+		t.Fatalf("err = %v", err)
 	}
 }
 

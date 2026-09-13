@@ -39,3 +39,11 @@ func TestByteLevelPrefixSpaceAndEncode(t *testing.T) {
 		t.Fatalf("ids = %v, err = %v", ids, err)
 	}
 }
+
+func TestQwenByteLevelSplit(t *testing.T) {
+	got := (ByteLevel{Qwen: true}).Split("!hello 12\n")
+	want := []string{"!hello", " ", "1", "2", "\n"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pieces = %#v, want %#v", got, want)
+	}
+}

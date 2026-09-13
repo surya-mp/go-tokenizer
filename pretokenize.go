@@ -9,6 +9,8 @@ import (
 type ByteLevel struct {
 	// AddPrefixSpace prepends one ASCII space when text does not start with one.
 	AddPrefixSpace bool
+	// Qwen uses Qwen's published Split-regex-compatible rules.
+	Qwen bool
 }
 
 // Split returns raw text pieces to pass individually through ByteLevelBPE.
@@ -18,6 +20,9 @@ func (p ByteLevel) Split(text string) []string {
 	}
 	if p.AddPrefixSpace && text[0] != ' ' {
 		text = " " + text
+	}
+	if p.Qwen {
+		return qwenSplit(text)
 	}
 	chars := []rune(text)
 	pieces := make([]string, 0, len(chars)/2+1)
@@ -54,6 +59,56 @@ func (p ByteLevel) Split(text string) []string {
 	}
 	return pieces
 }
+
+// qwenSplit implements Qwen's published Split(Regex) followed by ByteLevel
+// pre-tokenization. It avoids Go's unsupported regex look-ahead syntax.
+func qwenSplit(text string) []string {
+	chars := []rune(text)
+	pieces := make([]string, 0, len(chars)/2+1)
+	for start := 0; start < len(chars); {
+		if end := contractionEnd(chars, start); end > start {
+			pieces = append(pieces, string(chars[start:end]))
+			start = end
+			continue
+		}
+		if unicode.IsLetter(chars[start]) {
+			end := classEnd(chars, start, unicode.IsLetter)
+			pieces = append(pieces, string(chars[start:end]))
+			start = end
+			continue
+		}
+		if !qwenNewline(chars[start]) && !unicode.IsNumber(chars[start]) && start+1 < len(chars) && unicode.IsLetter(chars[start+1]) {
+			end := classEnd(chars, start+1, unicode.IsLetter)
+			pieces = append(pieces, string(chars[start:end]))
+			start = end
+			continue
+		}
+		if unicode.IsNumber(chars[start]) {
+			pieces = append(pieces, string(chars[start]))
+			start++
+			continue
+		}
+		symbolStart := start
+		if chars[symbolStart] == ' ' && symbolStart+1 < len(chars) && isSymbol(chars[symbolStart+1]) {
+			symbolStart++
+		}
+		if isSymbol(chars[symbolStart]) {
+			end := symbolEnd(chars, symbolStart)
+			for end < len(chars) && qwenNewline(chars[end]) {
+				end++
+			}
+			pieces = append(pieces, string(chars[start:end]))
+			start = end
+			continue
+		}
+		end := whitespaceEnd(chars, start)
+		pieces = append(pieces, string(chars[start:end]))
+		start = end
+	}
+	return pieces
+}
+
+func qwenNewline(value rune) bool { return value == '\r' || value == '\n' }
 
 // Encode splits text and encodes each piece with model.
 func (p ByteLevel) Encode(model Encoder, text string) ([]int, error) {
